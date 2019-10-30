@@ -1,0 +1,84 @@
+package org.csu
+
+import org.apache.spark.{SparkConf, SparkContext}
+
+import scala.collection.mutable
+import scala.util.control.Breaks.{break, breakable}
+
+object PeopleYouMightKnows {
+  //count：共同朋友数
+  class SortPair(val Id : String, val count : Int) extends Ordered[SortPair] with Serializable{
+    override def compare(that: SortPair): Int = {
+      val res = that.count.compareTo(count)     //先按朋友数从大到小排
+      if(res != 0)
+        res
+      else
+        Id.toInt.compareTo(that.Id.toInt)       //如果朋友数相等再按Id从小到大排
+    }
+  }
+
+  def lineMap(line : String) : List[(String, String)] = {
+    var result = List[(String, String)]()       //存储间接朋友对
+    val content = line.split("\t");     //0     1,2,3,4,5,6,7,8,9
+    val source = content(0)                     //0
+
+    if(content.length < 2){                     //表明该行是0           这种形式
+      result ::= (source, "empty")              //防止source是个孤立点
+      return result
+    }
+
+    //如果该行里有直接朋友关系就按","将其分隔开
+    val friendList = content(1).split(",")
+
+    for(i <- 0 to friendList.length - 1){
+      result ::= (source, "T" + friendList(i))   //标记已经是真正的朋友了
+      result ::= (friendList(i), "T" + source)
+      for(j <- i + 1 to friendList.length - 1){
+        result ::= (friendList(i), friendList(j)) //记录可能的间接朋友对
+        result ::= (friendList(j), friendList(i))
+      }
+    }
+    result
+  }
+
+  def lineReduce(x:Iterable[String]) : String = {
+    var m = mutable.HashMap[String, Int]()      //用于存储每个ID对应的公共朋友数
+    for(s <- x){
+      if(s.startsWith("T")){                    //为true表示该人已是朋友应排除以-1计数
+        m.put(s.substring(1), -1)
+      }else if(m.contains(s) && m.get(s).get != -1){ //如果合法就累计计数
+        m.put(s, m.get(s).get + 1)
+      }else{
+        if(!s.equals("empty") && !m.contains(s)){   //合法初始为1
+          m.put(s, 1)
+        }
+      }
+    }
+
+    val result = new StringBuilder("  ")
+    if(m.isEmpty) return result.toString()          //对应给出空的字符串对应空列表
+
+    //排序 take(10)如果不足10个会返回所有
+    val sortedSet = m.toList.map(e => new SortPair(e._1, e._2)).sorted.take(10)
+
+    //拼接结果字符串
+    breakable{
+      for(i <- 0 to sortedSet.size - 1){
+        if(sortedSet(i).count == -1) break()
+        if(i < sortedSet.size - 1 && sortedSet(i + 1).count != -1){
+          result.append(sortedSet(i).Id).append(",")
+        }else{
+          result.append(sortedSet(i).Id)
+        }
+      }
+    }
+    result.toString()
+  }
+
+  def main(args: Array[String]): Unit = {
+    System.setProperty("hadoop.home.dir","F:\\文档\\大三上\\hadoop_study\\hadoop-common-2.2.0-bin-master\\hadoop-common-2.2.0-bin-master" )
+    //System.load("F:\\文档\\大三上\\hadoop_study\\hadoop-common-2.2.0-bin-master\\hadoop-common-2.2.0-bin-master\\bin\\hadoop.dll")
+    val sc = new SparkContext(new SparkConf().setAppName("PeopleYouMightKnows").setMaster("local"))
+    sc.textFile("file:///F:\\LiveJournal.txt").flatMap(line => lineMap(line)).groupByKey().sortBy(_._1.toInt).map(x => (x._1, lineReduce(x._2))).saveAsTextFile("F:\\rs")
+  }
+}
